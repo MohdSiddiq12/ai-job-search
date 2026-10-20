@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JobHunt</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mut:#656d76;--bd:#d8dce1;--ac:#0b5fff;--ok:#1a7f37;--warn:#b35900;--bad:#c62828}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b22;--tx:#e6e9ee;--mut:#9aa4af;--bd:#2c333d;--ac:#6ea0ff;--ok:#3fb950;--warn:#e3a008;--bad:#f06a6a}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.6rem 1rem;background:var(--card);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:2}
+header b{margin-right:1rem}nav{display:flex;gap:.25rem;flex-wrap:wrap}
+nav a{padding:.35rem .8rem;border-radius:6px;color:var(--tx);text-decoration:none}nav a[aria-current=page]{background:var(--ac);color:#fff}
+main{max-width:1200px;margin:1rem auto;padding:0 1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:.8rem 1rem}
+a.metric{display:block;text-decoration:none;color:inherit}a.metric:hover,a.metric:focus{border-color:var(--ac)}
+.metric .n{font-size:1.8rem;font-weight:700}.mut{color:var(--mut);font-size:.85rem}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+th,td{padding:.45rem .6rem;text-align:left;border-bottom:1px solid var(--bd);vertical-align:top}th{font-size:.8rem;color:var(--mut)}
+tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus{background:color-mix(in srgb,var(--ac) 10%,transparent)}
+.wrap{overflow-x:auto}.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.75rem}
+input,select,textarea,button{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:.35rem .6rem}
+button{cursor:pointer}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}button:disabled{opacity:.5;cursor:wait}
+textarea{width:100%;min-height:5rem}
+.tag{display:inline-block;padding:0 .5rem;border-radius:99px;font-size:.78rem;border:1px solid var(--bd)}
+.s-hi{color:var(--ok);font-weight:700}.s-mid{color:var(--warn);font-weight:700}.s-lo{color:var(--mut);font-weight:700}
+#drawer{position:fixed;top:0;right:0;width:min(560px,100%);height:100%;background:var(--card);border-left:1px solid var(--bd);padding:1rem;overflow:auto;transform:translateX(105%);transition:transform .2s;z-index:5}
+#drawer.open{transform:none}.bar{height:8px;border-radius:4px;background:var(--bd);overflow:hidden}.bar i{display:block;height:100%;background:var(--ac)}
+#toast{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:.5rem 1rem;border-radius:8px;display:none;z-index:9}
+.err{color:var(--bad)}.ok{color:var(--ok)}
+</style></head><body>
+<header><b>JobHunt</b><nav id="nav" aria-label="Sections"></nav><span class="mut" id="runstate" role="status"></span></header>
+<main id="main" tabindex="-1"></main>
+<aside id="drawer" aria-label="Job details"></aside><div id="toast" role="alert"></div>
+<script>
+const $=s=>document.querySelector(s);
+const h=(t,a={},...k)=>{const e=document.createElement(t);for(const[x,v]of Object.entries(a)){if(x==='on')for(const[ev,f]of Object.entries(v))e.addEventListener(ev,f);else if(x==='class')e.className=v;else if(v!==false&&v!=null)e.setAttribute(x,v===true?'':v)}for(const c of k.flat())if(c!=null)e.append(c.nodeType?c:document.createTextNode(String(c)));return e};
+const safeUrl=u=>/^https?:\/\//i.test(u)?u:'#';
+async function api(path,opt={}){const r=await fetch(path,{method:opt.method||'GET',headers:{'Content-Type':'application/json'},body:opt.body?JSON.stringify(opt.body):undefined});let d={};try{d=await r.json()}catch{}if(!r.ok){const e=new Error(d.error||r.statusText);e.status=r.status;throw e}return d}
+function toast(m,bad){const t=$('#toast');t.textContent=m;t.style.background=bad?'var(--bad)':'';t.style.color=bad?'#fff':'';t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display='none',4500)}
+const fail=e=>toast(e.message,true);
+const cls=s=>s==null?'':s>=70?'s-hi':s>=45?'s-mid':'s-lo';
+const TABS=['overview','jobs','applications','searches','profile','runs'];
+const iso=d=>d.toISOString().slice(0,10);
+const ago=n=>{const d=new Date();d.setDate(d.getDate()-n);return iso(d)};
+function route(){const[tab,qs]=(location.hash.slice(1)||'overview').split('?');const t=TABS.includes(tab)?tab:'overview';
+ $('#nav').replaceChildren(...TABS.map(x=>h('a',{href:'#'+x,'aria-current':x===t?'page':false},x[0].toUpperCase()+x.slice(1))));
+ closeDrawer();({overview,jobs,applications,searches,profile,runs})[t](new URLSearchParams(qs||'')).catch(fail);}
+addEventListener('hashchange',route);
+
+async function overview(){const o=await api('/api/overview');const L=(k)=>'#jobs?'+k;
+ const M=(n,label,href)=>h('a',{class:'card metric',href},h('div',{class:'n'},n),h('div',{class:'mut'},label));
+ const lr=o.last_run;
+ $('#main').replaceChildren(
+  h('div',{class:'grid'},M(o.new_today,'new today',L('since='+ago(0))),M(o.new_week,'new this week',L('since='+ago(7))),
+   M(o.awaiting_review,'awaiting review',L('status=new')),M(o.stale,'possibly stale',L('stale=1')),M(o.total,'all jobs','#jobs'),
+   M(o.shortlisted,'shortlisted jobs','#jobs?app=shortlisted'),M(o.fit_analyses,'jobs with fit analysis','#jobs'),
+   M(o.applications_prepared,'applications prepared','#applications?stage=prepared'),
+   M(o.applications_submitted,'applications submitted','#applications?stage=submitted'),
+   M(o.interviews,'interviews','#applications?status=interview'),M(o.offers,'offers','#applications?stage=offer'),
+   M(o.upcoming_followups,'follow-ups due in 7 days','#applications?follow_up=upcoming'),
+   M(o.overdue_followups,'overdue follow-ups','#applications?follow_up=overdue'),
+   M(o.descriptions?.manual||0,'manual descriptions',L('description_status=manual')),
+   M(o.descriptions?.complete||0,'verified complete descriptions',L('description_status=complete')),
+   M(o.tailoring?.total||0,'tailoring requests',L('tailored=1')),
+   ...Object.entries(o.applications).map(([k,v])=>M(v,'application: '+k.replace(/_/g,' '),L('app='+k)))),
+  h('div',{class:'card'},h('b',{},'Search health'),h('p',{class:'mut'},o.last_success?`Last successful run: ${new Date(o.last_success).toLocaleString()}`:'No successful run yet. Go to Searches and run one.',
+    lr?` Latest run #${lr.id}: ${lr.status}.`:'',o.failed_runs_7d?` ${o.failed_runs_7d} failed/partial run(s) in 7 days (see Runs).`:'')),
+  h('h3',{},'Top untracked matches'),
+  h('div',{class:'wrap'},jobTable(o.top.map(t=>({...t,discovery_status:'',app_status:null})),true)));}
+
+function jobTable(rows,small){if(!rows.length)return h('p',{class:'mut'},'No jobs match. Run a search or loosen the filters.');
+ return h('table',{},h('thead',{},h('tr',{},...['Score','Title','Company','Where',...(small?[]:['Description','Posted','Found','Status']),].map(x=>h('th',{},x)))),
+  h('tbody',{},rows.map(r=>h('tr',{tabindex:0,on:{click:()=>openJob(r.key),keydown:e=>{if(e.key==='Enter')openJob(r.key)}}},
+   h('td',{class:cls(r.score)},r.score??'?'),h('td',{},r.title),h('td',{},r.company),h('td',{},h('span',{class:'tag'},r.location_class||'')),
+   ...(small?[]:[h('td',{},r.description_status||'none'),h('td',{},r.posted_date||'undated'),h('td',{},r.first_seen?.slice(0,10)),h('td',{},r.app_status?'app: '+r.app_status.replace(/_/g,' '):r.discovery_status)])))));}
+
+async function jobs(p){const f={q:p.get('q')||'',status:p.get('status')||'',loc:p.get('loc')||'',min_score:p.get('min_score')||'',since:p.get('since')||'',stale:p.get('stale')||'',app:p.get('app')||'',tailored:p.get('tailored')||'',description_status:p.get('description_status')||'',source:p.get('source')||'',sort:p.get('sort')||'',page:p.get('page')||'1',page_size:'50'};
+ const qs=new URLSearchParams(Object.entries(f).filter(([,v])=>v));const d=await api('/api/jobs?'+qs);
+ const go=()=>{const n=new URLSearchParams();for(const[k,e]of Object.entries(ctl)){if(e.value)n.set(k,e.value)}for(const k of['since','stale','app','tailored'])if(f[k])n.set(k,f[k]);n.set('page','1');location.hash='#jobs?'+n};
+ const pageTo=n=>{const params=new URLSearchParams(p);params.set('page',String(n));location.hash='#jobs?'+params};
+ const sel=(opts,v)=>{const s=h('select',{on:{change:go}},opts.map(o=>h('option',{value:o[0],selected:o[0]===v},o[1])));return s};
+ const ctl={q:h('input',{type:'search',placeholder:'Search title or company',value:f.q,'aria-label':'Search',on:{change:go}}),
+  status:sel([['','any discovery status'],...['new','reviewed','dismissed','skipped','expired'].map(x=>[x,x])],f.status),
+  loc:sel([['','any location'],...['dubai','uae-other','remote-unverified','uncertain'].map(x=>[x,x])],f.loc),
+  description_status:sel([['','any description'],...['manual','complete','partial','failed'].map(x=>[x,x])],f.description_status),
+  source:h('input',{placeholder:'Source',value:f.source,'aria-label':'Job source',on:{change:go}}),
+  min_score:sel([['','any score'],['45','45+'],['60','60+'],['75','75+']],f.min_score),
+  sort:sel([['','best score'],['new','newest found'],['posted','newest posted']],f.sort)};
+ const active=['since','stale','app','tailored'].filter(k=>f[k]).map(k=>`${k}=${f[k]}`);
+ $('#main').replaceChildren(h('div',{class:'row'},...Object.values(ctl),active.length?h('span',{class:'tag'},'filter: '+active.join(', ')):null,
+  h('button',{on:{click:()=>location.hash='#jobs'}},'Clear'),h('span',{class:'mut'},d.total+' matches · page '+d.page)),h('div',{class:'wrap'},jobTable(d.jobs)),
+  h('div',{class:'row'},h('button',{disabled:d.page<=1,on:{click:()=>pageTo(d.page-1)}},'Previous'),
+   h('span',{class:'mut'},`Page ${d.page} of ${Math.max(1,Math.ceil(d.total/d.page_size))}`),
+   h('button',{disabled:d.page*d.page_size>=d.total,on:{click:()=>pageTo(d.page+1)}},'Next')));}
+
+async function applications(p){
+ const f={q:p.get('q')||'',status:p.get('status')||'',stage:p.get('stage')||'',follow_up:p.get('follow_up')||'',page:p.get('page')||'1',page_size:'50'};
+ const qs=new URLSearchParams(Object.entries(f).filter(([k,v])=>v&&k!=='page_size'));qs.set('page_size','50');
+ const d=await api('/api/applications?'+qs);
+ const change=()=>{const n=new URLSearchParams();for(const[k,e]of Object.entries(ctl))if(e.value)n.set(k,e.value);location.hash='#applications?'+n};
+ const sel=(opts,v)=>h('select',{on:{change}},opts.map(o=>h('option',{value:o[0],selected:o[0]===v},o[1])));
+ const ctl={q:h('input',{type:'search',placeholder:'Search company or role',value:f.q,'aria-label':'Search applications',on:{change}}),
+  status:sel([['','any application status'],...['investigating','shortlisted','drafting','ready_for_review','applied','assessment','interview','offer','hired','rejected','withdrawn','no_response','offer_declined'].map(x=>[x,x.replace(/_/g,' ')])],f.status),
+  stage:sel([['','any stage group'],['prepared','prepared'],['submitted','submitted'],['offer','offers']],f.stage),
+  follow_up:sel([['','any follow-up'],['upcoming','due in 7 days'],['overdue','overdue'],['none','no date']],f.follow_up)};
+ const pageTo=n=>{const params=new URLSearchParams(p);params.set('page',String(n));location.hash='#applications?'+params};
+ const rows=d.applications.length?h('table',{},h('thead',{},h('tr',{},...['Role','Company','Status','Follow-up','Last activity'].map(x=>h('th',{},x)))),
+  h('tbody',{},d.applications.map(a=>h('tr',{tabindex:0,on:{click:()=>openJob(a.job_key),keydown:e=>{if(e.key==='Enter')openJob(a.job_key)}}},
+   h('td',{},a.title),h('td',{},a.company),h('td',{},a.status.replace(/_/g,' ')),
+   h('td',{},a.follow_up||'not scheduled'),h('td',{},a.updated_at.slice(0,10)))))):
+  h('div',{class:'card'},h('b',{},'No applications match these filters.'),h('p',{class:'mut'},'Open a job to start tracking it. Discovery alone never creates an application.'));
+ $('#main').replaceChildren(h('h2',{},'Applications'),
+  h('div',{class:'row'},...Object.values(ctl),h('button',{on:{click:()=>location.hash='#applications'}},'Clear'),
+   h('span',{class:'mut'},`${d.total} records · page ${d.page}`)),
+  h('div',{class:'wrap'},rows),
+  h('div',{class:'row'},h('button',{disabled:d.page<=1,on:{click:()=>pageTo(d.page-1)}},'Previous'),
+   h('span',{class:'mut'},`Page ${d.page} of ${Math.max(1,Math.ceil(d.total/d.page_size))}`),
+   h('button',{disabled:d.page*d.page_size>=d.total,on:{click:()=>pageTo(d.page+1)}},'Next')));
+}
+
+function closeDrawer(){$('#drawer').classList.remove('open')}
+async function openJob(key){const j=await api('/api/jobs/'+encodeURIComponent(key));const matcher=await api('/api/integrations/resume-matcher');const dr=$('#drawer');const s=j.score_json||{};
+ const reload=async(fn,msg)=>{try{await fn();toast(msg);openJob(key);route2()}catch(e){fail(e)}};
+ const route2=()=>{if((location.hash||'#overview').startsWith('#jobs'))jobs(new URLSearchParams(location.hash.split('?')[1]||'')).catch(fail)};
+ const post=(body)=>api(`/api/jobs/${encodeURIComponent(key)}/status`,{method:'POST',body});
+ const appSel=h('select',{'aria-label':'Application status'},h('option',{value:''},'Set application status…'),
+  ...['investigating','shortlisted','drafting','ready_for_review','applied','assessment','interview','offer','hired','rejected','withdrawn','no_response','offer_declined'].map(x=>h('option',{value:x,selected:j.application?.status===x},x.replace(/_/g,' '))));
+ const notes=h('textarea',{'aria-label':'Notes',placeholder:'Notes, concerns, decisions'},j.application?.notes||'');
+ const followUp=h('input',{type:'date','aria-label':'Follow-up date',value:j.application?.follow_up||''});
+ const descText=h('textarea',{'aria-label':'Full job description (manual paste)',maxlength:100000,
+  placeholder:'Paste the complete description from the original posting here. Search snippets are not complete descriptions.'},
+  j.description?.original_text||'');
+ const saveDescription=h('button',{class:'p',on:{click:()=>reload(()=>api(`/api/jobs/${encodeURIComponent(key)}/description`,
+  {method:'POST',body:{text:descText.value}}),'Manual description saved')}},'Save manual description');
+ const resumeRef=h('input',{type:'text',placeholder:'documents/cv/your-resume.pdf',value:'', 'aria-label':'Resume reference'});
+ const prepareTailoring=h('button',{class:'p',on:{click:async e=>{
+  e.target.disabled=true;
+  try{
+   const keyForRequest=(globalThis.crypto?.randomUUID?.()||('jh_'+Date.now()+'_'+Math.random().toString(36).slice(2)));
+   const r=await api(`/api/jobs/${encodeURIComponent(key)}/tailoring`,{method:'POST',body:{resume_reference:resumeRef.value,idempotency_key:keyForRequest}});
+   toast(`Request ${r.id} saved. ${matcher.status.replace(/_/g,' ')}.`);openJob(key).catch(fail);
+  }catch(x){fail(x);e.target.disabled=false}
+ }}},'Prepare tailoring packet');
+ const CONF=['applied','assessment','interview','offer','hired','offer_declined'];
+ const save=h('button',{class:'p',on:{click:()=>{const st=appSel.value;if(!st)return toast('Pick a status first',true);
+  let confirmed=false;if(CONF.includes(st)){if(!confirm(`Record "${st.replace(/_/g,' ')}"? Only confirm if this actually happened outside the app.`))return;confirmed=true}
+  reload(()=>post({status:st,notes:notes.value,follow_up:followUp.value,confirmed}),'Saved')}}},'Save application');
+ dr.replaceChildren(h('div',{class:'row'},h('button',{on:{click:closeDrawer}},'Close'),h('a',{href:safeUrl(j.url),target:'_blank',rel:'noopener noreferrer'},'Open original posting')),
+  h('h2',{},j.title),h('div',{class:'mut'},`${j.company} · ${j.location||'no location'} · ${j.location_class}`),
+  h('p',{class:'mut'},`Posted ${j.posted_date||'undated'} · first found ${j.first_seen.slice(0,10)} · last seen ${j.last_seen.slice(0,10)} · last verified ${j.last_verified?j.last_verified.slice(0,10):'never'}`),
+  j.alt_listings?.length?h('p',{class:'mut'},'Also listed: ',j.alt_listings.map(a=>h('a',{href:safeUrl(a.url),target:'_blank',rel:'noopener noreferrer'},(a.location||'other')+' '))):null,
+  h('h3',{},'Job description'),
+  h('p',{class:'mut'},j.description?`Status: ${j.description.status} · saved ${j.description.created_at.slice(0,10)} · source: ${j.description.method}. Manual text is user supplied and has not been verified against the posting.`:'No description saved. The search result snippet is not treated as complete.'),
+  j.description_skill_mentions?.length?h('p',{class:'mut'},'Profile skills mentioned in this text (not verified requirements; this does not change the fit score): ',j.description_skill_mentions.join(', ')):null,
+  descText,h('div',{class:'row'},saveDescription),
+  h('h3',{},'Resume Matcher'),
+  h('p',{class:'mut'},`Connection: ${matcher.status.replace(/_/g,' ')}. ${matcher.message}`),
+  h('p',{class:'mut'},'JobHunt does not send your resume or contact the service. The packet includes this job description and a local resume file reference only.'),
+  h('div',{class:'row'},resumeRef,prepareTailoring),
+  ...(j.tailoring_requests||[]).flatMap(t=>[
+   h('div',{class:'card'},h('b',{},`Tailoring request #${t.id}: ${t.status.replace(/_/g,' ')}`),
+    h('div',{class:'mut'},`Resume: ${t.selected_resume_ref} · updated ${t.updated_at.slice(0,10)}`),
+    t.result_document_ref?h('div',{class:'mut'},`Result (${t.result_source}): ${t.result_document_ref}`):null,
+    h('a',{href:`/api/tailoring/${t.id}/export`,download:`jobhunt-tailoring-${t.id}.json`},'Download manual handoff packet'),
+    !t.result_document_ref?h('div',{class:'row'},
+     h('input',{type:'text',placeholder:'documents/applications/tailored-resume.pdf','aria-label':`Returned document for request ${t.id}`,id:`tailored-${t.id}`}),
+     h('button',{on:{click:async()=>{const ref=document.getElementById(`tailored-${t.id}`).value;if(!confirm('Confirm this is the completed document returned from Resume Matcher?'))return;
+      try{await api(`/api/tailoring/${t.id}/result`,{method:'POST',body:{document_reference:ref,confirmed:true}});toast('Returned document linked');openJob(key)}catch(x){fail(x)}}}},'Link returned file')):null)
+  ]),
+  h('div',{class:'card'},h('b',{},'Fit '),h('span',{class:cls(j.score)},j.score??'?'),h('span',{class:'mut'},` / 100 · confidence ${s.confidence??'?'}%`),
+   ...(s.components||[]).map(c=>h('div',{style:'margin-top:.6rem'},h('div',{},`${c.name}: `,h('b',{},c.score==null?'unknown':c.score),h('span',{class:'mut'},` (weight ${c.weight})`)),
+    h('div',{class:'bar'},h('i',{style:`width:${c.score||0}%`})),h('div',{class:'mut'},c.evidence),...(c.missing||[]).map(m=>h('div',{class:'mut'},'• '+m)))),
+   h('p',{class:'mut'},s.note||'')),
+  j.skills?.length?h('p',{},j.skills.map(x=>h('span',{class:'tag'},x))):null,
+  h('h3',{},'Decision'),h('div',{class:'row'},...[['like','Like'],['maybe','Maybe'],['dislike','Dislike']].map(([v,l])=>h('button',{on:{click:()=>{const r=prompt('Reason (optional)')??'';reload(()=>api(`/api/jobs/${encodeURIComponent(key)}/feedback`,{method:'POST',body:{verdict:v,reason:r}}),'Feedback saved')}}},l)),
+   h('button',{on:{click:()=>reload(()=>post({discovery_status:'reviewed'}),'Marked reviewed')}},'Mark reviewed'),
+   h('button',{on:{click:()=>reload(()=>post({discovery_status:'dismissed'}),'Dismissed')}},'Dismiss')),
+  j.feedback.length?h('p',{class:'mut'},'Feedback: '+j.feedback.map(f=>f.verdict+(f.reason?` (${f.reason})`:'')).join('; ')):null,
+  h('h3',{},'Application'),h('p',{class:'mut'},j.application?`Current: ${j.application.status.replace(/_/g,' ')} since ${j.application.updated_at.slice(0,10)}`:'Not tracked. Discovery never marks a job as applied.'),
+  h('div',{class:'row'},appSel,h('label',{},'Follow-up ',followUp)),notes,h('div',{class:'row'},save),
+  h('h3',{},'History'),...j.history.map(x=>h('div',{class:'mut'},`${x.ts.slice(0,16).replace('T',' ')} · ${x.kind} · ${x.detail||''}`)));
+ dr.classList.add('open');dr.focus?.();}
+
+async function searches(){const d=await api('/api/searches');
+ const name=h('input',{placeholder:'Name'}),qs=h('textarea',{placeholder:'One query per line, e.g.\nAI Engineer\nData Engineer'}),
+  country=h('input',{value:'AE',size:3,'aria-label':'Country'}),city=h('input',{value:'dubai','aria-label':'City label'}),
+  age=h('input',{type:'number',value:14,min:1,style:'width:5rem','aria-label':'Posted within days'}),rem=h('input',{type:'checkbox',checked:true,id:'rem'}),
+  iv=h('input',{type:'number',value:0,min:0,style:'width:6rem','aria-label':'Repeat every N minutes (0 = manual)'});
+ $('#main').replaceChildren(h('h3',{},'Saved searches'),
+  h('div',{class:'wrap'},h('table',{},h('thead',{},h('tr',{},...['Name','Queries','Where','Repeat','',''].map(x=>h('th',{},x)))),
+   h('tbody',{},d.searches.map(s=>h('tr',{style:'cursor:default'},h('td',{},s.name),h('td',{},JSON.parse(s.queries).join(', ')),
+    h('td',{},`${s.country}/${s.city}, ${s.jobage}d${s.include_remote?', +remote':''}`),h('td',{},s.interval_minutes?`every ${s.interval_minutes}m`:'manual'),
+    h('td',{},h('button',{class:'p',on:{click:async e=>{e.target.disabled=true;try{await api('/api/runs',{method:'POST',body:{search_id:s.id}});toast('Run started');setTimeout(poll,800)}catch(x){fail(x);e.target.disabled=false}}}},'Run now')),
+    h('td',{},h('button',{on:{click:async()=>{if(confirm('Delete this search?')){try{await api('/api/searches/'+s.id,{method:'DELETE'});searches()}catch(x){fail(x)}}}}},'Delete'))))))),
+  h('h3',{},'New search'),h('div',{class:'card'},h('div',{class:'row'},name,country,city,age,h('label',{},rem,' include remote'),h('label',{},'repeat (min) ',iv)),qs,
+   h('div',{class:'row',style:'margin-top:.5rem'},h('button',{class:'p',on:{click:async()=>{try{await api('/api/searches',{method:'POST',body:{name:name.value,queries:qs.value.split('\n'),country:country.value,city:city.value,jobage:+age.value,include_remote:rem.checked,interval_minutes:+iv.value}});toast('Saved');searches()}catch(e){fail(e)}}}},'Save search'))),
+  h('p',{class:'mut'},'Source: Freehire (public API, best effort, no SLA). Other sources are not wired yet; this app never claims full market coverage.'),
+  h('div',{class:'row'},h('button',{on:{click:async()=>{try{const r=await api('/api/import',{method:'POST'});toast(`Imported ${r.imported} from seen_jobs.json (read-only)`)}catch(e){fail(e)}}}},'Import seen_jobs.json'),
+   h('a',{href:'/api/export',download:'jobhunt-export.json'},'Export all data (JSON)')));}
+
+const csvList=a=>a.join('\n');
+async function profile(){const p=await api('/api/profile');
+ const ta=(k,l)=>[h('label',{},h('b',{},l)),h('textarea',{id:'p_'+k,'aria-label':l},csvList(p[k]||[]))];
+ const w=Object.fromEntries(Object.entries(p.weights).map(([k,v])=>[k,h('input',{type:'number',step:'0.05',min:'0',value:v,style:'width:5rem','aria-label':'weight '+k})]));
+ $('#main').replaceChildren(h('p',{class:'mut'},'Seeded from the skills and roles in your project notes. Edit freely: saving re-scores every job. Resume and evidence tracking come in a later phase.'),
+  h('div',{class:'card'},...ta('skills','Your skills (one per line)'),...ta('target_titles','Target job titles'),...ta('essential_skills','Essential skills (a listing needing one you lack is capped at 30 on skills)'),...ta('irrelevant_skills','Irrelevant skills (ignored in scoring)'),
+   h('b',{},'Score weights (unknown data counts as a neutral 50 and lowers the confidence)'),h('div',{class:'row'},...Object.entries(w).map(([k,e])=>h('label',{},k+' ',e))),
+   h('button',{class:'p',on:{click:async()=>{const g=k=>document.getElementById('p_'+k).value.split('\n').map(s=>s.trim()).filter(Boolean);
+    try{const r=await api('/api/profile',{method:'PUT',body:{skills:g('skills'),target_titles:g('target_titles'),essential_skills:g('essential_skills'),irrelevant_skills:g('irrelevant_skills'),weights:Object.fromEntries(Object.entries(w).map(([k,e])=>[k,+e.value]))}});toast(`Saved. ${r.rescored} jobs re-scored.`)}catch(e){fail(e)}}}},'Save and re-score')));}
+
+async function runs(){const d=await api('/api/runs');
+ $('#main').replaceChildren(d.runs.length?h('div',{class:'wrap'},h('table',{},h('thead',{},h('tr',{},...['#','Started (local)','Trigger','Status','Jobs','New','Errors'].map(x=>h('th',{},x)))),
+  h('tbody',{},d.runs.map(r=>h('tr',{style:'cursor:default'},h('td',{},r.id),h('td',{},r.started?new Date(r.started).toLocaleString():''),h('td',{},r.trigger),
+   h('td',{class:r.status==='complete'?'ok':r.status==='running'?'':'err'},r.status),h('td',{},r.found),h('td',{},r.new_jobs),
+   h('td',{class:'err'},JSON.parse(r.errors||'[]').join(' | ').slice(0,300))))))):h('p',{class:'mut'},'No runs yet.'));}
+
+let pt,was=false;async function poll(){clearTimeout(pt);try{const d=await api('/api/runs');$('#runstate').textContent=d.running?'Search running…':'';
+ if(d.running){was=true;pt=setTimeout(poll,2500)}else if(was){was=false;if(location.hash.match(/^#(overview|jobs|runs)?(\?.*)?$/)||!location.hash)route()}}catch{}}
+route();poll();
+</script></body></html>

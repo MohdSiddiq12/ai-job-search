@@ -1,0 +1,81 @@
+diff --git a/apps/backend/app/config.py b/apps/backend/app/config.py
+index d37fd9b..bc87788 100644
+--- a/apps/backend/app/config.py
++++ b/apps/backend/app/config.py
+@@ -333,6 +333,11 @@ class Settings(BaseSettings):
+     port: int = 8000
+     reload: bool = False
+     log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
++
++    # Status of the tracker card created automatically after a resume is tailored.
++    # "applied" is the upstream default. Set TRACKER_AUTO_STATUS=saved so that
++    # tailoring a resume never records an application that was not actually sent.
++    tracker_auto_status: Literal["saved", "applied"] = "applied"
+     frontend_base_url: str = "http://localhost:3000"
+ 
+     # Total timeout for AI operations, including validation, database preloads,
+diff --git a/apps/backend/app/routers/resumes.py b/apps/backend/app/routers/resumes.py
+index 929a09e..5c16377 100644
+--- a/apps/backend/app/routers/resumes.py
++++ b/apps/backend/app/routers/resumes.py
+@@ -144,7 +144,10 @@ async def _auto_create_tracker_application(
+     job: dict[str, Any] | None,
+     title: str | None,
+ ) -> None:
+-    """Best-effort: drop an ``applied`` card on the tracker after a tailoring.
++    """Best-effort: drop a tracker card after a tailoring.
++
++    The card's status comes from ``settings.tracker_auto_status`` (default
++    ``applied``, the upstream behaviour; ``saved`` records no submission).
+ 
+     Company/role come from the cached job (zero extra LLM call). Wrapped so a
+     tracker failure can never break the tailoring flow.
+@@ -159,7 +162,7 @@ async def _auto_create_tracker_application(
+             job_id=job_id,
+             resume_id=tailored_resume_id,
+             master_resume_id=master_resume_id,
+-            status="applied",
++            status=settings.tracker_auto_status,
+             company=company,
+             role=role,
+         )
+diff --git a/apps/backend/tests/integration/test_tracker_autocreate_status.py b/apps/backend/tests/integration/test_tracker_autocreate_status.py
+new file mode 100644
+index 0000000..bbdaf11
+--- /dev/null
++++ b/apps/backend/tests/integration/test_tracker_autocreate_status.py
+@@ -0,0 +1,34 @@
++"""TRACKER_AUTO_STATUS=saved: tailoring must not record an application as applied."""
++
++from typing import Any
++
++from app.config import settings
++from app.database import Database
++from tests.integration.test_tracker_autocreate import (
++    _new_client,
++    _preview_then_confirm,
++)
++
++
++class TestTrackerAutoStatus:
++    async def test_saved_mode_creates_saved_card_without_applied_at(
++        self,
++        isolated_db: Database,
++        sample_resume: dict[str, Any],
++        monkeypatch: Any,
++    ) -> None:
++        monkeypatch.setattr(settings, "tracker_auto_status", "saved")
++        _, job_id, tailored_id = await _preview_then_confirm(isolated_db, sample_resume)
++
++        async with _new_client() as client:
++            board = (await client.get("/api/v1/applications")).json()["columns"]
++
++        assert board["applied"] == []
++        assert len(board["saved"]) == 1
++        card = board["saved"][0]
++        assert card["job_id"] == job_id
++        assert card["resume_id"] == tailored_id
++        assert card["applied_at"] is None  # no submission is claimed
++
++    async def test_default_stays_upstream_compatible(self) -> None:
++        assert type(settings).model_fields["tracker_auto_status"].default == "applied"
